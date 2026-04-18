@@ -8,8 +8,8 @@ export interface PostMeta {
   slug: string;
   title: string;
   date: string;
-  excerpt?: string;
-  tags?: string[];
+  excerpt: string;
+  tags: string[];
   readingTime: number; // 分钟
   wordCount: number;
 }
@@ -28,7 +28,10 @@ function ensurePostsDir(): boolean {
  *  - 英文按词数 / 250 词/分钟
  *  - 最少 1 分钟
  */
-function computeReadingStats(content: string): { readingTime: number; wordCount: number } {
+function computeReadingStats(content: string): {
+  readingTime: number;
+  wordCount: number;
+} {
   const chineseChars = content.match(/[\u4e00-\u9fff]/g)?.length || 0;
   const englishWords = content.match(/[a-zA-Z]+/g)?.length || 0;
   const minutes = chineseChars / 400 + englishWords / 250;
@@ -38,16 +41,24 @@ function computeReadingStats(content: string): { readingTime: number; wordCount:
   };
 }
 
+function buildExcerpt(data: Record<string, unknown>, content: string): string {
+  if (typeof data.excerpt === "string" && data.excerpt.trim()) {
+    return data.excerpt.trim();
+  }
+  return content.replace(/\s+/g, " ").slice(0, 140).trim();
+}
+
+function buildTags(data: Record<string, unknown>): string[] {
+  if (!Array.isArray(data.tags)) {
+    return [];
+  }
+  return data.tags.filter((t: unknown): t is string => typeof t === "string");
+}
+
 function parseMeta(filename: string): PostMeta {
   const slug = filename.replace(/\.md$/, "");
   const raw = fs.readFileSync(path.join(postsDir, filename), "utf8");
   const { data, content } = matter(raw);
-
-  const excerpt =
-    typeof data.excerpt === "string" && data.excerpt.trim()
-      ? data.excerpt.trim()
-      : content.replace(/\s+/g, " ").slice(0, 140).trim();
-
   const stats = computeReadingStats(content);
 
   return {
@@ -57,10 +68,8 @@ function parseMeta(filename: string): PostMeta {
       typeof data.date === "string" && data.date
         ? data.date
         : new Date().toISOString(),
-    excerpt,
-    tags: Array.isArray(data.tags)
-      ? data.tags.filter((t: unknown): t is string => typeof t === "string")
-      : undefined,
+    excerpt: buildExcerpt(data, content),
+    tags: buildTags(data),
     readingTime: stats.readingTime,
     wordCount: stats.wordCount,
   };
@@ -90,10 +99,8 @@ export function getPostBySlug(slug: string): Post {
       typeof data.date === "string" && data.date
         ? data.date
         : new Date().toISOString(),
-    excerpt: typeof data.excerpt === "string" ? data.excerpt : undefined,
-    tags: Array.isArray(data.tags)
-      ? data.tags.filter((t: unknown): t is string => typeof t === "string")
-      : undefined,
+    excerpt: buildExcerpt(data, content),
+    tags: buildTags(data),
     readingTime: stats.readingTime,
     wordCount: stats.wordCount,
     content,
