@@ -52,11 +52,16 @@ export default function Admin() {
       }
 
       setStatus("success");
-      setMessage(
-        `✓ 发布成功：slug = ${data.slug}${
-          data.url ? "，已提交到仓库" : ""
-        }`
-      );
+      const successParts = [`✓ 发布成功：${data.slug}`];
+      if (data.localSynced) {
+        successParts.push("本地已同步，返回首页即可看到 ✨");
+      } else {
+        successParts.push("已提交到 GitHub，等待部署完成后上线");
+      }
+      if (data.url) {
+        successParts.push(`GitHub: ${data.url}`);
+      }
+      setMessage(successParts.join("\n"));
       setTitle("");
       setTags("");
       setContent("");

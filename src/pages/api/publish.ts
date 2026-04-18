@@ -1,5 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import slugify from "slugify";
+import fs from "fs";
+import path from "path";
 
 interface PublishBody {
   title?: string;
@@ -159,11 +161,35 @@ export default async function handler(
       });
     }
 
+    // dev 环境：同步写本地文件，让首页立即可见（生产环境 Vercel 文件系统只读，跳过）
+    let localSynced = false;
+    if (process.env.NODE_ENV === "development") {
+      try {
+        const postsDir = path.join(process.cwd(), "posts");
+        if (!fs.existsSync(postsDir)) {
+          fs.mkdirSync(postsDir, { recursive: true });
+        }
+        fs.writeFileSync(path.join(postsDir, `${safeSlug}.md`), md, "utf8");
+        localSynced = true;
+      } catch (writeErr) {
+        console.warn("[api/publish] 本地文件写入失败（不影响远程发布）:", writeErr);
+      }
+    }
+
+    // 尝试触发 ISR revalidate（生产环境生效）
+    try {
+      await res.revalidate?.("/");
+      await res.revalidate?.(`/posts/${safeSlug}`);
+    } catch (revalidateErr) {
+      console.warn("[api/publish] revalidate 失败:", revalidateErr);
+    }
+
     return res.status(200).json({
       ok: true,
       slug: safeSlug,
       url: data.content?.html_url,
       commit: data.commit?.sha,
+      localSynced,
     });
   } catch (err) {
     console.error("[api/publish] unexpected error:", err);

@@ -10,6 +10,8 @@ export interface PostMeta {
   date: string;
   excerpt?: string;
   tags?: string[];
+  readingTime: number; // 分钟
+  wordCount: number;
 }
 
 export interface Post extends PostMeta {
@@ -18,6 +20,22 @@ export interface Post extends PostMeta {
 
 function ensurePostsDir(): boolean {
   return fs.existsSync(postsDir);
+}
+
+/**
+ * 中英文混排的阅读时间估算：
+ *  - 中文按字数 / 400 字/分钟
+ *  - 英文按词数 / 250 词/分钟
+ *  - 最少 1 分钟
+ */
+function computeReadingStats(content: string): { readingTime: number; wordCount: number } {
+  const chineseChars = content.match(/[\u4e00-\u9fff]/g)?.length || 0;
+  const englishWords = content.match(/[a-zA-Z]+/g)?.length || 0;
+  const minutes = chineseChars / 400 + englishWords / 250;
+  return {
+    readingTime: Math.max(1, Math.round(minutes)),
+    wordCount: chineseChars + englishWords,
+  };
 }
 
 function parseMeta(filename: string): PostMeta {
@@ -30,6 +48,8 @@ function parseMeta(filename: string): PostMeta {
       ? data.excerpt.trim()
       : content.replace(/\s+/g, " ").slice(0, 140).trim();
 
+  const stats = computeReadingStats(content);
+
   return {
     slug,
     title: typeof data.title === "string" && data.title ? data.title : slug,
@@ -41,6 +61,8 @@ function parseMeta(filename: string): PostMeta {
     tags: Array.isArray(data.tags)
       ? data.tags.filter((t: unknown): t is string => typeof t === "string")
       : undefined,
+    readingTime: stats.readingTime,
+    wordCount: stats.wordCount,
   };
 }
 
@@ -59,6 +81,7 @@ export function getAllPosts(): PostMeta[] {
 export function getPostBySlug(slug: string): Post {
   const raw = fs.readFileSync(path.join(postsDir, `${slug}.md`), "utf8");
   const { data, content } = matter(raw);
+  const stats = computeReadingStats(content);
 
   return {
     slug,
@@ -71,6 +94,8 @@ export function getPostBySlug(slug: string): Post {
     tags: Array.isArray(data.tags)
       ? data.tags.filter((t: unknown): t is string => typeof t === "string")
       : undefined,
+    readingTime: stats.readingTime,
+    wordCount: stats.wordCount,
     content,
   };
 }
