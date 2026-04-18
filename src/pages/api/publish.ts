@@ -57,9 +57,11 @@ export default async function handler(
 
   const expectedToken = process.env.PUBLISH_TOKEN;
   if (!expectedToken) {
-    return res
-      .status(500)
-      .json({ error: "服务端未配置 PUBLISH_TOKEN，请在 .env.local 中设置" });
+    return res.status(500).json({
+      error: "服务端未配置 PUBLISH_TOKEN",
+      hint:
+        "本地开发：在 .env.local 中设置 PUBLISH_TOKEN；Vercel 部署：在项目 Settings → Environment Variables 中添加 PUBLISH_TOKEN，并重新部署",
+    });
   }
 
   if (req.headers.authorization !== `Bearer ${expectedToken}`) {
@@ -76,9 +78,11 @@ export default async function handler(
   const githubToken = process.env.GITHUB_TOKEN;
 
   if (!repo || !githubToken) {
-    return res
-      .status(500)
-      .json({ error: "服务端未配置 REPO 或 GITHUB_TOKEN" });
+    return res.status(500).json({
+      error: "服务端未配置 REPO 或 GITHUB_TOKEN",
+      hint:
+        "本地：在 .env.local 中设置 REPO 和 GITHUB_TOKEN；Vercel：在项目 Settings → Environment Variables 中添加，并重新部署",
+    });
   }
 
   const safeSlug = buildSlug(title);

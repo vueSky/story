@@ -26,8 +26,11 @@ export default function Admin() {
     setStatus("publishing");
     setMessage("正在发布到 GitHub...");
 
+    const endpoint =
+      process.env.NEXT_PUBLIC_PUBLISH_ENDPOINT || "/api/publish";
+
     try {
-      const resp = await fetch("/api/publish", {
+      const resp = await fetch(endpoint, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

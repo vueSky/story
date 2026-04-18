@@ -1,0 +1,24 @@
+name = "story-blog-publisher"
+main = "src/index.ts"
+compatibility_date = "2024-04-01"
+compatibility_flags = ["nodejs_compat"]
+
+# ⚠️ 不要在此文件填敏感信息（会进 git）
+# 请用 wrangler secret put 或 Cloudflare Dashboard 设置：
+#   PUBLISH_TOKEN  —— 后台发布口令
+#   GITHUB_TOKEN   —— GitHub PAT（Contents: Read and write）
+#   REPO           —— owner/repo
+#
+# 设置命令：
+#   npx wrangler secret put PUBLISH_TOKEN
+#   npx wrangler secret put GITHUB_TOKEN
+#   npx wrangler secret put REPO
+
+# 非敏感变量可以放 [vars]（但 secret 更合适）
+# [vars]
+# ALLOWED_ORIGIN = "https://story-mtup.vercel.app"
+
+# 可选：绑定自定义域
+# [[routes]]
+# pattern = "publish.example.com/*"
+# zone_name = "example.com"
