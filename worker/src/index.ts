@@ -46,8 +46,9 @@ interface GithubFilePayload {
 function corsHeaders(origin: string): HeadersInit {
   return {
     "Access-Control-Allow-Origin": origin,
-    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type, Authorization",
+    "Access-Control-Expose-Headers": "Content-Type",
     "Access-Control-Max-Age": "86400",
     Vary: "Origin",
   };
@@ -105,12 +106,46 @@ function toBase64Utf8(str: string): string {
   return btoa(binary);
 }
 
+/**
+ * 归一化 origin：去掉末尾斜杠、全部小写，便于白名单比较。
+ */
+function normalizeOrigin(value: string): string {
+  return value.trim().replace(/\/+$/, "").toLowerCase();
+}
+
+/**
+ * 决定返回的 Access-Control-Allow-Origin 值。
+ *  - 未设 ALLOWED_ORIGIN / 设为 "*"：回显请求 Origin；Origin 缺失时返回 "*"
+ *  - ALLOWED_ORIGIN 是逗号分隔白名单：匹配时回显具体 Origin，否则回显第一项
+ *
+ * 容错点：
+ *  - 自动去掉 ALLOWED_ORIGIN 配置末尾的 `/`
+ *  - 大小写不敏感比较
+ */
 function pickOrigin(request: Request, env: Env): string {
-  const origin = request.headers.get("Origin") || "*";
-  if (env.ALLOWED_ORIGIN && env.ALLOWED_ORIGIN !== "*") {
-    return env.ALLOWED_ORIGIN;
+  const requestOrigin = request.headers.get("Origin") || "";
+  const configured = env.ALLOWED_ORIGIN?.trim();
+
+  if (!configured || configured === "*") {
+    return requestOrigin || "*";
   }
-  return origin;
+
+  const whitelist = configured
+    .split(",")
+    .map((s) => normalizeOrigin(s))
+    .filter(Boolean);
+
+  if (whitelist.length === 0) {
+    return requestOrigin || "*";
+  }
+
+  const normalizedRequest = normalizeOrigin(requestOrigin);
+  if (normalizedRequest && whitelist.includes(normalizedRequest)) {
+    return requestOrigin;
+  }
+
+  // 未匹配：返回白名单第一项（浏览器会拒绝但不影响 preflight 可视化排查）
+  return whitelist[0];
 }
 
 // ---------- Worker 入口 ----------
