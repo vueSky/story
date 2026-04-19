@@ -1,17 +1,18 @@
 /**
  * Cloudflare Worker：博客发布服务
  *
- * 能力：
- *  - 接收 POST /，校验 Authorization: Bearer <PUBLISH_TOKEN>
- *  - 将文章 Markdown 文件 PUT 到 GitHub 仓库 posts/{slug}.md
- *  - 支持 CORS 跨域（供 Vercel 前端调用）
- *  - 返回结构化错误，便于前端显示 hint
+ * 路由：
+ *   OPTIONS *           CORS preflight
+ *   GET  /              健康检查
+ *   POST /              发布单篇文章
+ *   GET  /list          列出 posts/ 目录所有文章（管理用）
+ *   POST /delete        批量删除文章 { slugs: string[] }
  *
- * 绑定变量（通过 wrangler secret 或 Dashboard 设置）：
+ * 绑定变量：
  *   PUBLISH_TOKEN   —— 后台口令
  *   GITHUB_TOKEN    —— GitHub PAT
  *   REPO            —— owner/repo
- *   ALLOWED_ORIGIN  —— 可选，允许的前端域名。不设则回显请求 Origin
+ *   ALLOWED_ORIGIN  —— 可选，允许的前端域名
  */
 
 export interface Env {
@@ -27,6 +28,10 @@ interface PublishBody {
   tags?: string[];
 }
 
+interface DeleteBody {
+  slugs?: string[];
+}
+
 interface GithubErrorPayload {
   message?: string;
   documentation_url?: string;
@@ -39,6 +44,17 @@ interface GithubPutPayload extends GithubErrorPayload {
 
 interface GithubFilePayload {
   sha?: string;
+  name?: string;
+  path?: string;
+  html_url?: string;
+  download_url?: string;
+}
+
+interface DeleteResultItem {
+  slug: string;
+  ok: boolean;
+  message?: string;
+  commit?: string;
 }
 
 // ---------- 工具函数 ----------
@@ -64,7 +80,6 @@ function json(data: unknown, status: number, origin: string): Response {
   });
 }
 
-/** 生成 URL 安全的英文 slug，中文 / 表情会被过滤 */
 function slugifyAscii(title: string): string {
   return title
     .toLowerCase()
@@ -88,15 +103,11 @@ function hintFromStatus(status: number, repo: string): string | undefined {
   if (status === 403)
     return "GITHUB_TOKEN 权限不足，Fine-grained PAT 需要 Contents: Read and write";
   if (status === 404)
-    return `仓库 ${repo} 不存在，或该 Token 无访问权限（检查 owner/name 和 PAT 勾选的仓库范围）`;
-  if (status === 422) return "文件已存在但 sha 未带上（并发冲突）";
+    return `仓库 ${repo} 不存在，或文件不存在 / Token 无访问权限`;
+  if (status === 422) return "并发冲突或 sha 不匹配";
   return undefined;
 }
 
-/**
- * UTF-8 安全的 base64 编码。
- * Workers 原生 btoa 只接受 Latin1 字符串，中文会抛错，必须先 UTF-8 编码。
- */
 function toBase64Utf8(str: string): string {
   const bytes = new TextEncoder().encode(str);
   let binary = "";
@@ -106,22 +117,19 @@ function toBase64Utf8(str: string): string {
   return btoa(binary);
 }
 
-/**
- * 归一化 origin：去掉末尾斜杠、全部小写，便于白名单比较。
- */
+/** 解析 base64 后的内容（用于读取 GitHub contents 接口返回的 md） */
+function fromBase64Utf8(b64: string): string {
+  const cleaned = b64.replace(/\s+/g, "");
+  const binary = atob(cleaned);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return new TextDecoder("utf-8").decode(bytes);
+}
+
 function normalizeOrigin(value: string): string {
   return value.trim().replace(/\/+$/, "").toLowerCase();
 }
 
-/**
- * 决定返回的 Access-Control-Allow-Origin 值。
- *  - 未设 ALLOWED_ORIGIN / 设为 "*"：回显请求 Origin；Origin 缺失时返回 "*"
- *  - ALLOWED_ORIGIN 是逗号分隔白名单：匹配时回显具体 Origin，否则回显第一项
- *
- * 容错点：
- *  - 自动去掉 ALLOWED_ORIGIN 配置末尾的 `/`
- *  - 大小写不敏感比较
- */
 function pickOrigin(request: Request, env: Env): string {
   const requestOrigin = request.headers.get("Origin") || "";
   const configured = env.ALLOWED_ORIGIN?.trim();
@@ -143,9 +151,374 @@ function pickOrigin(request: Request, env: Env): string {
   if (normalizedRequest && whitelist.includes(normalizedRequest)) {
     return requestOrigin;
   }
-
-  // 未匹配：返回白名单第一项（浏览器会拒绝但不影响 preflight 可视化排查）
   return whitelist[0];
+}
+
+/** 校验 token + 必要 env，返回 null 表示通过，否则返回错误 Response */
+function authGuard(
+  request: Request,
+  env: Env,
+  origin: string
+): Response | null {
+  const { PUBLISH_TOKEN, GITHUB_TOKEN, REPO } = env;
+  if (!PUBLISH_TOKEN || !GITHUB_TOKEN || !REPO) {
+    return json(
+      {
+        error: "Worker 未配置必要的环境变量",
+        hint: "请用 `npx wrangler secret put PUBLISH_TOKEN|GITHUB_TOKEN|REPO` 设置",
+      },
+      500,
+      origin
+    );
+  }
+  if (request.headers.get("Authorization") !== `Bearer ${PUBLISH_TOKEN}`) {
+    return json({ error: "Unauthorized" }, 401, origin);
+  }
+  return null;
+}
+
+function buildGithubHeaders(env: Env): HeadersInit {
+  return {
+    Authorization: `Bearer ${env.GITHUB_TOKEN}`,
+    Accept: "application/vnd.github+json",
+    "User-Agent": "story-blog-worker",
+    "X-GitHub-Api-Version": "2022-11-28",
+  };
+}
+
+// ---------- 业务 handler ----------
+
+async function handlePublish(
+  request: Request,
+  env: Env,
+  origin: string
+): Promise<Response> {
+  let body: PublishBody;
+  try {
+    body = await request.json<PublishBody>();
+  } catch {
+    return json({ error: "Invalid JSON body" }, 400, origin);
+  }
+
+  const { title, content, tags } = body;
+  if (!title?.trim() || !content?.trim()) {
+    return json({ error: "标题和内容不能为空" }, 400, origin);
+  }
+
+  const slug = buildSlug(title);
+
+  const frontmatter: string[] = [
+    "---",
+    `title: ${JSON.stringify(title)}`,
+    `date: ${JSON.stringify(new Date().toISOString())}`,
+  ];
+  if (Array.isArray(tags) && tags.length > 0) {
+    const safeTags = tags.filter((t): t is string => typeof t === "string");
+    if (safeTags.length > 0) {
+      frontmatter.push(
+        `tags: [${safeTags.map((t) => JSON.stringify(t)).join(", ")}]`
+      );
+    }
+  }
+  frontmatter.push("---", "");
+
+  const md = `${frontmatter.join("\n")}\n${content}\n`;
+  const base64 = toBase64Utf8(md);
+  const filePath = `posts/${slug}.md`;
+  const apiUrl = `https://api.github.com/repos/${env.REPO}/contents/${filePath}`;
+  const githubHeaders = buildGithubHeaders(env);
+
+  // 查询 sha
+  let existingSha: string | undefined;
+  try {
+    const checkResp = await fetch(apiUrl, { headers: githubHeaders });
+    if (checkResp.status === 200) {
+      existingSha = (await checkResp.json<GithubFilePayload>()).sha;
+    } else if (checkResp.status !== 404) {
+      const err = await checkResp
+        .json<GithubErrorPayload>()
+        .catch<GithubErrorPayload>(() => ({}));
+      return json(
+        {
+          error: `GitHub 查询失败（${checkResp.status}）：${err.message || "未知"}`,
+          hint: hintFromStatus(checkResp.status, env.REPO),
+          docs: err.documentation_url,
+        },
+        checkResp.status,
+        origin
+      );
+    }
+  } catch (err) {
+    return json(
+      { error: "GitHub 查询请求失败", detail: String(err) },
+      502,
+      origin
+    );
+  }
+
+  // PUT
+  try {
+    const putResp = await fetch(apiUrl, {
+      method: "PUT",
+      headers: { ...githubHeaders, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        message: existingSha ? `update post: ${title}` : `add post: ${title}`,
+        content: base64,
+        sha: existingSha,
+      }),
+    });
+    const data = await putResp
+      .json<GithubPutPayload>()
+      .catch<GithubPutPayload>(() => ({}));
+
+    if (!putResp.ok) {
+      return json(
+        {
+          error: `GitHub 提交失败（${putResp.status}）：${data.message || "未知"}`,
+          hint: hintFromStatus(putResp.status, env.REPO),
+          docs: data.documentation_url,
+        },
+        putResp.status,
+        origin
+      );
+    }
+
+    return json(
+      {
+        ok: true,
+        slug,
+        url: data.content?.html_url,
+        commit: data.commit?.sha,
+      },
+      200,
+      origin
+    );
+  } catch (err) {
+    return json(
+      { error: "GitHub 提交请求失败", detail: String(err) },
+      502,
+      origin
+    );
+  }
+}
+
+interface ListedPost {
+  slug: string;
+  title: string;
+  date: string;
+  tags: string[];
+  sha: string;
+  htmlUrl?: string;
+}
+
+/** 简易解析 frontmatter（够用即可，不引入依赖） */
+function parseFrontmatter(md: string): {
+  title?: string;
+  date?: string;
+  tags?: string[];
+} {
+  const m = md.match(/^---\s*\n([\s\S]*?)\n---/);
+  if (!m) return {};
+  const fm: { title?: string; date?: string; tags?: string[] } = {};
+  for (const line of m[1].split(/\r?\n/)) {
+    const kv = line.match(/^(\w+):\s*(.+)$/);
+    if (!kv) continue;
+    const key = kv[1];
+    let value = kv[2].trim();
+    if (key === "tags") {
+      const arr = value.match(/\[(.*)\]/);
+      if (arr) {
+        fm.tags = arr[1]
+          .split(",")
+          .map((s) => s.trim().replace(/^"(.*)"$/, "$1"))
+          .filter(Boolean);
+      }
+    } else {
+      value = value.replace(/^"(.*)"$/, "$1");
+      if (key === "title") fm.title = value;
+      if (key === "date") fm.date = value;
+    }
+  }
+  return fm;
+}
+
+async function handleList(env: Env, origin: string): Promise<Response> {
+  const apiUrl = `https://api.github.com/repos/${env.REPO}/contents/posts`;
+  const githubHeaders = buildGithubHeaders(env);
+
+  try {
+    const resp = await fetch(apiUrl, { headers: githubHeaders });
+
+    if (resp.status === 404) {
+      // posts/ 目录还不存在
+      return json({ ok: true, posts: [] }, 200, origin);
+    }
+    if (!resp.ok) {
+      const err = await resp
+        .json<GithubErrorPayload>()
+        .catch<GithubErrorPayload>(() => ({}));
+      return json(
+        {
+          error: `列表查询失败（${resp.status}）：${err.message || "未知"}`,
+          hint: hintFromStatus(resp.status, env.REPO),
+        },
+        resp.status,
+        origin
+      );
+    }
+
+    const files = await resp.json<
+      Array<{
+        name: string;
+        path: string;
+        sha: string;
+        type: string;
+        html_url?: string;
+        download_url?: string;
+      }>
+    >();
+
+    const mdFiles = files.filter(
+      (f) => f.type === "file" && f.name.endsWith(".md")
+    );
+
+    // 并行拉每个文件的内容来解析 frontmatter（最多 30 篇并发）
+    const posts: ListedPost[] = await Promise.all(
+      mdFiles.map(async (f) => {
+        const slug = f.name.replace(/\.md$/, "");
+        let fm: { title?: string; date?: string; tags?: string[] } = {};
+        if (f.download_url) {
+          try {
+            const raw = await fetch(f.download_url, {
+              headers: { "User-Agent": "story-blog-worker" },
+            });
+            if (raw.ok) {
+              const text = await raw.text();
+              fm = parseFrontmatter(text);
+            }
+          } catch {
+            // ignore
+          }
+        }
+        return {
+          slug,
+          title: fm.title || slug,
+          date: fm.date || "",
+          tags: fm.tags || [],
+          sha: f.sha,
+          htmlUrl: f.html_url,
+        };
+      })
+    );
+
+    posts.sort((a, b) => (a.date < b.date ? 1 : -1));
+    return json({ ok: true, posts }, 200, origin);
+  } catch (err) {
+    return json(
+      { error: "列表查询请求失败", detail: String(err) },
+      502,
+      origin
+    );
+  }
+}
+
+async function handleDelete(
+  request: Request,
+  env: Env,
+  origin: string
+): Promise<Response> {
+  let body: DeleteBody;
+  try {
+    body = await request.json<DeleteBody>();
+  } catch {
+    return json({ error: "Invalid JSON body" }, 400, origin);
+  }
+
+  const slugs = (body.slugs || []).filter(
+    (s): s is string => typeof s === "string" && s.trim().length > 0
+  );
+  if (slugs.length === 0) {
+    return json({ error: "slugs 不能为空" }, 400, origin);
+  }
+  if (slugs.length > 50) {
+    return json({ error: "单次最多删除 50 篇" }, 400, origin);
+  }
+
+  const githubHeaders = buildGithubHeaders(env);
+
+  const results: DeleteResultItem[] = await Promise.all(
+    slugs.map(async (slug): Promise<DeleteResultItem> => {
+      const filePath = `posts/${slug}.md`;
+      const apiUrl = `https://api.github.com/repos/${env.REPO}/contents/${filePath}`;
+
+      // 先查 sha
+      let sha: string | undefined;
+      try {
+        const checkResp = await fetch(apiUrl, { headers: githubHeaders });
+        if (checkResp.status === 404) {
+          return { slug, ok: false, message: "文件不存在" };
+        }
+        if (!checkResp.ok) {
+          const err = await checkResp
+            .json<GithubErrorPayload>()
+            .catch<GithubErrorPayload>(() => ({}));
+          return {
+            slug,
+            ok: false,
+            message: `查询失败：${err.message || checkResp.status}`,
+          };
+        }
+        sha = (await checkResp.json<GithubFilePayload>()).sha;
+      } catch (err) {
+        return { slug, ok: false, message: `查询异常：${String(err)}` };
+      }
+
+      if (!sha) {
+        return { slug, ok: false, message: "未拿到 sha" };
+      }
+
+      // DELETE
+      try {
+        const delResp = await fetch(apiUrl, {
+          method: "DELETE",
+          headers: { ...githubHeaders, "Content-Type": "application/json" },
+          body: JSON.stringify({
+            message: `delete post: ${slug}`,
+            sha,
+          }),
+        });
+        const data = await delResp
+          .json<GithubPutPayload>()
+          .catch<GithubPutPayload>(() => ({}));
+
+        if (!delResp.ok) {
+          return {
+            slug,
+            ok: false,
+            message: `删除失败（${delResp.status}）：${data.message || "未知"}`,
+          };
+        }
+        return { slug, ok: true, commit: data.commit?.sha };
+      } catch (err) {
+        return { slug, ok: false, message: `删除异常：${String(err)}` };
+      }
+    })
+  );
+
+  const succeeded = results.filter((r) => r.ok).length;
+  const failed = results.length - succeeded;
+
+  return json(
+    {
+      ok: failed === 0,
+      total: results.length,
+      succeeded,
+      failed,
+      results,
+    },
+    200,
+    origin
+  );
 }
 
 // ---------- Worker 入口 ----------
@@ -153,177 +526,48 @@ function pickOrigin(request: Request, env: Env): string {
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const origin = pickOrigin(request, env);
+    const url = new URL(request.url);
+    const path = url.pathname.replace(/\/+$/, "") || "/";
+    const method = request.method;
 
     // CORS preflight
-    if (request.method === "OPTIONS") {
-      return new Response(null, {
-        status: 204,
-        headers: corsHeaders(origin),
-      });
+    if (method === "OPTIONS") {
+      return new Response(null, { status: 204, headers: corsHeaders(origin) });
     }
 
-    // 健康检查（GET）
-    if (request.method === "GET") {
-      return json(
-        { ok: true, service: "story-blog-publisher", time: new Date().toISOString() },
-        200,
-        origin
-      );
-    }
-
-    if (request.method !== "POST") {
-      return json({ error: "Method not allowed" }, 405, origin);
-    }
-
-    // 环境变量校验
-    const { PUBLISH_TOKEN, GITHUB_TOKEN, REPO } = env;
-    if (!PUBLISH_TOKEN || !GITHUB_TOKEN || !REPO) {
-      return json(
-        {
-          error: "Worker 未配置必要的环境变量",
-          hint:
-            "请用 `npx wrangler secret put PUBLISH_TOKEN|GITHUB_TOKEN|REPO` 或在 Cloudflare Dashboard 设置",
-        },
-        500,
-        origin
-      );
-    }
-
-    // 认证
-    if (request.headers.get("Authorization") !== `Bearer ${PUBLISH_TOKEN}`) {
-      return json({ error: "Unauthorized" }, 401, origin);
-    }
-
-    // 解析 body
-    let body: PublishBody;
-    try {
-      body = await request.json<PublishBody>();
-    } catch {
-      return json({ error: "Invalid JSON body" }, 400, origin);
-    }
-
-    const { title, content, tags } = body;
-    if (!title?.trim() || !content?.trim()) {
-      return json({ error: "标题和内容不能为空" }, 400, origin);
-    }
-
-    // 构建 slug 和 Markdown
-    const slug = buildSlug(title);
-
-    const frontmatter: string[] = [
-      "---",
-      `title: ${JSON.stringify(title)}`,
-      `date: ${JSON.stringify(new Date().toISOString())}`,
-    ];
-    if (Array.isArray(tags) && tags.length > 0) {
-      const safeTags = tags.filter((t): t is string => typeof t === "string");
-      if (safeTags.length > 0) {
-        frontmatter.push(
-          `tags: [${safeTags.map((t) => JSON.stringify(t)).join(", ")}]`
-        );
-      }
-    }
-    frontmatter.push("---", "");
-
-    const md = `${frontmatter.join("\n")}\n${content}\n`;
-    const base64 = toBase64Utf8(md);
-    const filePath = `posts/${slug}.md`;
-    const apiUrl = `https://api.github.com/repos/${REPO}/contents/${filePath}`;
-
-    const githubHeaders = {
-      Authorization: `Bearer ${GITHUB_TOKEN}`,
-      Accept: "application/vnd.github+json",
-      "User-Agent": "story-blog-worker",
-      "X-GitHub-Api-Version": "2022-11-28",
-    };
-
-    // 1) 查询现有文件 sha（文件已存在则 PUT 必须带 sha）
-    let existingSha: string | undefined;
-    try {
-      const checkResp = await fetch(apiUrl, { headers: githubHeaders });
-
-      if (checkResp.status === 200) {
-        const existing = await checkResp.json<GithubFilePayload>();
-        existingSha = existing.sha;
-      } else if (checkResp.status !== 404) {
-        const errData = await checkResp
-          .json<GithubErrorPayload>()
-          .catch<GithubErrorPayload>(() => ({}));
-        return json(
-          {
-            error: `GitHub 查询失败（${checkResp.status}）：${
-              errData.message || "未知错误"
-            }`,
-            hint: hintFromStatus(checkResp.status, REPO),
-            docs: errData.documentation_url,
-          },
-          checkResp.status,
-          origin
-        );
-      }
-    } catch (err) {
-      return json(
-        {
-          error: "GitHub 查询请求失败",
-          detail: err instanceof Error ? err.message : String(err),
-        },
-        502,
-        origin
-      );
-    }
-
-    // 2) 提交文件
-    try {
-      const putResp = await fetch(apiUrl, {
-        method: "PUT",
-        headers: {
-          ...githubHeaders,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          message: existingSha ? `update post: ${title}` : `add post: ${title}`,
-          content: base64,
-          sha: existingSha,
-        }),
-      });
-
-      const data = await putResp
-        .json<GithubPutPayload>()
-        .catch<GithubPutPayload>(() => ({}));
-
-      if (!putResp.ok) {
-        return json(
-          {
-            error: `GitHub 提交失败（${putResp.status}）：${
-              data.message || "未知错误"
-            }`,
-            hint: hintFromStatus(putResp.status, REPO),
-            docs: data.documentation_url,
-          },
-          putResp.status,
-          origin
-        );
-      }
-
+    // 健康检查
+    if (method === "GET" && path === "/") {
       return json(
         {
           ok: true,
-          slug,
-          url: data.content?.html_url,
-          commit: data.commit?.sha,
+          service: "story-blog-publisher",
+          time: new Date().toISOString(),
         },
         200,
         origin
       );
-    } catch (err) {
-      return json(
-        {
-          error: "GitHub 提交请求失败",
-          detail: err instanceof Error ? err.message : String(err),
-        },
-        502,
-        origin
-      );
     }
+
+    // 以下接口都需要认证
+    const authError = authGuard(request, env, origin);
+    if (authError) return authError;
+
+    if (method === "POST" && path === "/") {
+      return handlePublish(request, env, origin);
+    }
+
+    if (method === "GET" && path === "/list") {
+      return handleList(env, origin);
+    }
+
+    if (method === "POST" && path === "/delete") {
+      return handleDelete(request, env, origin);
+    }
+
+    return json(
+      { error: "Not Found", hint: "支持的路由：POST /、GET /list、POST /delete" },
+      404,
+      origin
+    );
   },
 } satisfies ExportedHandler<Env>;

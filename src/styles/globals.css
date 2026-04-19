@@ -161,7 +161,7 @@ body {
   font-size: 1.2em;
 }
 
-/* —— 细腻的噪点纹理（可选背景层） —— */
+/* —— 噪点纹理（可选） —— */
 .texture-noise {
   position: relative;
 }
@@ -173,4 +173,18 @@ body {
   opacity: 0.035;
   mix-blend-mode: multiply;
   background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+}
+
+/* —— 移动端：input/textarea 强制 16px，防止 iOS 自动 zoom —— */
+@media (max-width: 768px) {
+  input,
+  textarea,
+  select {
+    font-size: 16px !important;
+  }
+}
+
+/* —— 全局禁止 touch-action 横向手势缩放（避免双指 pinch 影响阅读） —— */
+html {
+  touch-action: pan-x pan-y;
 }
