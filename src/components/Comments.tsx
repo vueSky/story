@@ -1,4 +1,5 @@
 import dynamic from "next/dynamic";
+import { useEffect, useState } from "react";
 
 // Giscus 内部依赖 window，禁用 SSR
 const Giscus = dynamic(
@@ -6,18 +7,36 @@ const Giscus = dynamic(
   { ssr: false }
 );
 
-interface CommentsProps {
-  /** 可选：覆盖环境变量中的主题 */
-  theme?: "light" | "dark" | "preferred_color_scheme";
+type GiscusTheme = "light" | "dark" | "preferred_color_scheme";
+
+function detectTheme(): GiscusTheme {
+  if (typeof window === "undefined") return "light";
+  return document.documentElement.classList.contains("dark") ? "dark" : "light";
 }
 
-export default function Comments({ theme = "light" }: CommentsProps) {
+interface CommentsProps {
+  theme?: GiscusTheme;
+}
+
+export default function Comments({ theme: themeProp }: CommentsProps) {
   const repo = process.env.NEXT_PUBLIC_GISCUS_REPO;
   const repoId = process.env.NEXT_PUBLIC_GISCUS_REPO_ID;
   const category = process.env.NEXT_PUBLIC_GISCUS_CATEGORY;
   const categoryId = process.env.NEXT_PUBLIC_GISCUS_CATEGORY_ID;
 
-  // 配置缺失时优雅降级，不阻塞文章渲染
+  const [theme, setTheme] = useState<GiscusTheme>(themeProp ?? "light");
+
+  useEffect(() => {
+    if (themeProp) return;
+    setTheme(detectTheme());
+    const observer = new MutationObserver(() => setTheme(detectTheme()));
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["class"],
+    });
+    return () => observer.disconnect();
+  }, [themeProp]);
+
   if (!repo || !repoId || !category || !categoryId) {
     const missing = [
       !repo && "NEXT_PUBLIC_GISCUS_REPO",
@@ -29,9 +48,9 @@ export default function Comments({ theme = "light" }: CommentsProps) {
       .join(", ");
 
     return (
-      <div className="mt-12 pt-6 border-t border-gray-200 text-xs text-gray-400 text-center space-y-1">
+      <div className="mt-12 pt-6 border-t border-gray-200 dark:border-gray-800 text-xs text-gray-400 dark:text-gray-500 text-center space-y-1">
         <div>评论区未启用 · 缺失：{missing}</div>
-        <div className="text-[11px] text-gray-300">
+        <div className="text-[11px] text-gray-300 dark:text-gray-600">
           本地：修改 .env.local 后需重启 dev server　·　Vercel：在 Settings →
           Environment Variables 添加并 Redeploy
         </div>
@@ -40,7 +59,7 @@ export default function Comments({ theme = "light" }: CommentsProps) {
   }
 
   return (
-    <div className="mt-12 pt-6 border-t border-gray-200">
+    <div className="mt-12 pt-6 border-t border-gray-200 dark:border-gray-800">
       <Giscus
         id="comments"
         repo={repo as `${string}/${string}`}

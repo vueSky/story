@@ -87,6 +87,31 @@ export function getAllPosts(): PostMeta[] {
     .sort((a, b) => (a.date < b.date ? 1 : -1));
 }
 
+/**
+ * 基于 tag 重叠度找相关文章；标签相同越多越靠前，
+ * 标签数相同则按日期更近优先。最多返回 limit 篇。
+ */
+export function getRelatedPosts(slug: string, limit = 3): PostMeta[] {
+  const all = getAllPosts();
+  const current = all.find((p) => p.slug === slug);
+  if (!current || current.tags.length === 0) {
+    return all.filter((p) => p.slug !== slug).slice(0, limit);
+  }
+  const tagSet = new Set(current.tags);
+  return all
+    .filter((p) => p.slug !== slug)
+    .map((p) => ({
+      post: p,
+      score: p.tags.filter((t) => tagSet.has(t)).length,
+    }))
+    .filter((x) => x.score > 0)
+    .sort((a, b) =>
+      b.score - a.score || (a.post.date < b.post.date ? 1 : -1)
+    )
+    .slice(0, limit)
+    .map((x) => x.post);
+}
+
 export function getPostBySlug(slug: string): Post {
   const raw = fs.readFileSync(path.join(postsDir, `${slug}.md`), "utf8");
   const { data, content } = matter(raw);
