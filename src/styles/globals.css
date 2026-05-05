@@ -17,6 +17,13 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+html.dark,
+html.dark body {
+  background: #0b0d10;
+  color: #e6e8eb;
 }
 
 .font-serif {
@@ -40,6 +47,26 @@ body {
   animation: fade-up 0.6s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
+/* —— 背景光斑缓慢漂浮 —— */
+@keyframes blob {
+  0%, 100% { transform: translate(-50%, 0) scale(1); }
+  33% { transform: translate(-46%, 4%) scale(1.05); }
+  66% { transform: translate(-54%, -3%) scale(0.97); }
+}
+.animate-blob {
+  animation: blob 18s ease-in-out infinite;
+}
+
+/* —— 渐变文字流光 —— */
+@keyframes gradient-shift {
+  0%, 100% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+}
+.animate-gradient {
+  background-size: 200% 200%;
+  animation: gradient-shift 8s ease infinite;
+}
+
 /* —— 选中颜色 —— */
 ::selection {
   background: rgba(59, 130, 246, 0.2);
@@ -60,6 +87,15 @@ body {
 }
 ::-webkit-scrollbar-thumb:hover {
   background: rgba(0, 0, 0, 0.2);
+}
+html.dark ::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+}
+html.dark ::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+html.dark ::selection {
+  background: rgba(96, 165, 250, 0.3);
 }
 
 /* —— Prose（文章排版）精致化 —— */
@@ -161,6 +197,105 @@ body {
   font-size: 1.2em;
 }
 
+/* —— 表格 —— */
+.prose table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.95em;
+  margin: 1.5em 0;
+  overflow: hidden;
+  border-radius: 8px;
+  box-shadow: 0 0 0 1px #e5e7eb;
+}
+.prose thead {
+  background: #f8fafc;
+}
+.prose th,
+.prose td {
+  padding: 0.65em 1em;
+  border-bottom: 1px solid #eef0f3;
+  text-align: left;
+}
+.prose tbody tr:hover {
+  background: #fafbfc;
+}
+
+/* —— kbd —— */
+.prose kbd {
+  background: #fff;
+  border: 1px solid #d1d5db;
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 0.85em;
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.04);
+}
+
+/* —— 列表标记色 —— */
+.prose ul > li::marker {
+  color: #94a3b8;
+}
+.prose ol > li::marker {
+  color: #94a3b8;
+  font-variant-numeric: tabular-nums;
+}
+
+/* —— 暗色 prose 覆盖 —— */
+html.dark .prose {
+  color: #d4d8de;
+}
+html.dark .prose :is(h1, h2, h3, h4, strong) {
+  color: #f3f4f6;
+}
+html.dark .prose h2 {
+  border-bottom-color: #1f242c;
+}
+html.dark .prose a {
+  color: #60a5fa;
+  background-image: linear-gradient(#60a5fa, #60a5fa);
+}
+html.dark .prose blockquote {
+  border-left-color: #3b82f6;
+  background: linear-gradient(to right, rgba(59, 130, 246, 0.08), transparent);
+  color: #b8bec7;
+}
+html.dark .prose :not(pre) > code {
+  background: #1f242c;
+  color: #f472b6;
+}
+html.dark .prose hr::before {
+  color: #475569;
+}
+html.dark .prose table {
+  box-shadow: 0 0 0 1px #1f242c;
+}
+html.dark .prose thead {
+  background: #14181d;
+}
+html.dark .prose th,
+html.dark .prose td {
+  border-bottom-color: #1f242c;
+}
+html.dark .prose tbody tr:hover {
+  background: #14181d;
+}
+html.dark .prose kbd {
+  background: #1f242c;
+  border-color: #374151;
+  color: #e6e8eb;
+}
+html.dark .prose img {
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+  filter: brightness(0.9);
+}
+html.dark .prose :is(h2, h3) > a.anchor {
+  color: #475569;
+}
+html.dark .prose :is(h2, h3) > a.anchor:hover {
+  color: #60a5fa;
+}
+
 /* —— 噪点纹理（可选） —— */
 .texture-noise {
   position: relative;
@@ -187,4 +322,40 @@ body {
 /* —— 全局禁止 touch-action 横向手势缩放（避免双指 pinch 影响阅读） —— */
 html {
   touch-action: pan-x pan-y;
+  scroll-behavior: smooth;
+}
+
+/* 标题锚点偏移（避开 sticky header） */
+.prose :is(h2, h3) {
+  scroll-margin-top: 90px;
+}
+
+/* heading 内 # 锚点 */
+.prose :is(h2, h3) {
+  position: relative;
+}
+.prose :is(h2, h3) > a.anchor {
+  position: absolute;
+  left: -1.2em;
+  top: 0;
+  color: #cbd5e1;
+  background: none;
+  font-weight: 400;
+  text-decoration: none;
+  opacity: 0;
+  transition: opacity 0.2s, color 0.2s;
+  padding-right: 0.3em;
+}
+.prose :is(h2, h3):hover > a.anchor {
+  opacity: 1;
+}
+.prose :is(h2, h3) > a.anchor:hover {
+  color: #2563eb;
+}
+
+/* 隐藏 anchor 在小屏 */
+@media (max-width: 768px) {
+  .prose :is(h2, h3) > a.anchor {
+    display: none;
+  }
 }

@@ -1,7 +1,7 @@
 import Link from "next/link";
-import Head from "next/head";
 import type { GetStaticProps } from "next";
 import { getAllPosts, type PostMeta } from "@/lib/posts";
+import SEO from "@/components/SEO";
 
 interface Props {
   posts: PostMeta[];
@@ -17,8 +17,8 @@ function formatDate(date: string) {
 
 function TagPill({ tag }: { tag: string }) {
   return (
-    <span className="inline-flex items-center gap-1 bg-white/60 backdrop-blur text-gray-600 px-2.5 py-0.5 rounded-full text-xs border border-gray-200/60">
-      <span className="w-1 h-1 rounded-full bg-gray-400" />
+    <span className="inline-flex items-center gap-1 bg-white/60 dark:bg-gray-800/60 backdrop-blur text-gray-600 dark:text-gray-300 px-2.5 py-0.5 rounded-full text-xs border border-gray-200/60 dark:border-gray-700/60">
+      <span className="w-1 h-1 rounded-full bg-gray-400 dark:bg-gray-500" />
       {tag}
     </span>
   );
@@ -94,35 +94,54 @@ function PostCard({ post, index }: { post: PostMeta; index: number }) {
   return (
     <Link
       href={`/posts/${post.slug}`}
-      className="group relative block bg-white rounded-2xl p-6 md:p-7 border border-gray-200/70 hover:border-gray-300 hover:shadow-lg hover:-translate-y-1 transition-all duration-300 animate-fade-up"
+      className="group relative block bg-white dark:bg-gray-900/60 rounded-2xl p-6 md:p-7 border border-gray-200/70 dark:border-gray-800/70 hover:border-gray-300 dark:hover:border-gray-700 hover:shadow-lg dark:hover:shadow-black/40 hover:-translate-y-1 transition-all duration-300 animate-fade-up"
       style={{ animationDelay: `${Math.min(index * 60, 480)}ms` }}
     >
       {/* 顶部细线装饰 */}
       <div className="absolute top-0 left-6 right-6 h-px bg-gradient-to-r from-transparent via-gray-200 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
 
-      <div className="flex items-center gap-2 text-[11px] uppercase tracking-wider text-gray-400 mb-3">
+      <div className="flex items-center gap-2 text-[11px] uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-3">
         <time dateTime={post.date}>{formatDate(post.date)}</time>
         <span className="w-1 h-1 rounded-full bg-gray-300" />
         <span>{post.readingTime} min</span>
       </div>
 
-      <h3 className="font-serif text-xl md:text-2xl font-semibold text-gray-900 leading-snug tracking-tight mb-3 group-hover:text-blue-600 transition-colors duration-300">
+      <h3 className="font-serif text-xl md:text-2xl font-semibold text-gray-900 dark:text-gray-100 leading-snug tracking-tight mb-3 group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors duration-300">
         {post.title}
       </h3>
 
       {post.excerpt ? (
-        <p className="text-gray-600 text-sm md:text-[15px] leading-relaxed line-clamp-2 mb-4">
+        <p className="text-gray-600 dark:text-gray-400 text-sm md:text-[15px] leading-relaxed line-clamp-2 mb-4">
           {post.excerpt}
         </p>
       ) : null}
 
-      {post.tags && post.tags.length > 0 ? (
-        <div className="flex items-center flex-wrap gap-1.5">
-          {post.tags.map((tag) => (
-            <TagPill key={tag} tag={tag} />
-          ))}
-        </div>
-      ) : null}
+      <div className="flex items-end justify-between gap-3">
+        {post.tags && post.tags.length > 0 ? (
+          <div className="flex items-center flex-wrap gap-1.5">
+            {post.tags.map((tag) => (
+              <TagPill key={tag} tag={tag} />
+            ))}
+          </div>
+        ) : <span />}
+
+        <span
+          aria-hidden
+          className="inline-flex items-center justify-center w-8 h-8 rounded-full bg-gray-50 dark:bg-gray-800 text-gray-400 dark:text-gray-500 group-hover:bg-blue-600 group-hover:text-white group-hover:translate-x-0.5 transition-all duration-300 shrink-0"
+        >
+          <svg
+            className="w-3.5 h-3.5"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="M5 12h14M13 5l7 7-7 7" />
+          </svg>
+        </span>
+      </div>
     </Link>
   );
 }
@@ -132,10 +151,7 @@ export default function Home({ posts }: Props) {
 
   return (
     <>
-      <Head>
-        <title>My Blog — 思考、记录、分享</title>
-        <meta name="description" content="基于 Next.js + Markdown 的个人博客" />
-      </Head>
+      <SEO />
 
       <div className="space-y-16">
         {/* Hero 区 */}
@@ -145,32 +161,32 @@ export default function Home({ posts }: Props) {
             <div className="absolute top-10 right-1/4 w-96 h-96 bg-purple-100/40 rounded-full blur-3xl" />
           </div>
 
-          <div className="flex items-center gap-3 text-xs font-medium text-gray-500 uppercase tracking-[0.2em] mb-4">
-            <span className="w-6 h-px bg-gray-400" />
+          <div className="flex items-center gap-3 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-[0.2em] mb-4">
+            <span className="w-6 h-px bg-gray-400 dark:bg-gray-600" />
             Journal
           </div>
 
-          <h1 className="font-serif text-4xl md:text-6xl font-bold tracking-tight text-gray-900 leading-[1.05] mb-6">
+          <h1 className="font-serif text-4xl md:text-6xl font-bold tracking-tight text-gray-900 dark:text-gray-50 leading-[1.05] mb-6">
             思考、记录、分享
             <br />
-            <span className="bg-gradient-to-r from-blue-600 via-indigo-500 to-purple-600 bg-clip-text text-transparent">
+            <span className="bg-gradient-to-r from-blue-600 via-indigo-500 to-purple-600 bg-clip-text text-transparent animate-gradient">
               用文字留下此刻
             </span>
           </h1>
 
-          <p className="text-gray-600 text-base md:text-lg leading-relaxed max-w-xl">
+          <p className="text-gray-600 dark:text-gray-400 text-base md:text-lg leading-relaxed max-w-xl">
             一个用 Markdown 写作的个人空间。这里记录代码、生活、与那些值得被记住的瞬间。
           </p>
 
-          <div className="mt-8 flex items-center gap-6 text-sm text-gray-500">
+          <div className="mt-8 flex items-center gap-6 text-sm text-gray-500 dark:text-gray-400">
             <span className="flex items-center gap-2">
               <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
               共 {posts.length} 篇文章
             </span>
-            <span className="h-4 w-px bg-gray-300" />
+            <span className="h-4 w-px bg-gray-300 dark:bg-gray-700" />
             <Link
               href="/admin"
-              className="hover:text-gray-900 transition-colors inline-flex items-center gap-1"
+              className="hover:text-gray-900 dark:hover:text-gray-100 transition-colors inline-flex items-center gap-1"
             >
               写一篇
               <svg
@@ -189,10 +205,10 @@ export default function Home({ posts }: Props) {
         {posts.length === 0 ? (
           <div className="py-20 text-center">
             <div className="text-6xl mb-4">✍️</div>
-            <p className="text-gray-500">还没有文章。</p>
+            <p className="text-gray-500 dark:text-gray-400">还没有文章。</p>
             <Link
               href="/admin"
-              className="inline-block mt-4 px-5 py-2 bg-gray-900 text-white rounded-full text-sm hover:bg-gray-700 transition"
+              className="inline-block mt-4 px-5 py-2 bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 rounded-full text-sm hover:bg-gray-700 dark:hover:bg-white transition"
             >
               写第一篇
             </Link>
@@ -212,11 +228,11 @@ export default function Home({ posts }: Props) {
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
                     <span className="w-8 h-px bg-gray-400" />
-                    <h2 className="text-xs font-medium text-gray-500 uppercase tracking-[0.2em]">
+                    <h2 className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-[0.2em]">
                       Latest · 最新
                     </h2>
                   </div>
-                  <span className="text-xs text-gray-400">{rest.length} 篇</span>
+                  <span className="text-xs text-gray-400 dark:text-gray-500">{rest.length} 篇</span>
                 </div>
 
                 <div className="grid md:grid-cols-2 gap-5">
