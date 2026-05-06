@@ -97,12 +97,13 @@ export default function PostPage({ post, toc, prev, next, related }: Props) {
             {post.tags && post.tags.length > 0 ? (
               <span className="flex items-center gap-1.5 flex-wrap">
                 {post.tags.map((tag) => (
-                  <span
+                  <Link
                     key={tag}
-                    className="inline-block bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 px-2 py-0.5 rounded-full text-xs"
+                    href={`/tags/${encodeURIComponent(tag)}`}
+                    className="inline-block bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 px-2 py-0.5 rounded-full text-xs hover:bg-blue-100 dark:hover:bg-blue-900/40 hover:text-blue-700 dark:hover:text-blue-300 transition-colors"
                   >
                     #{tag}
-                  </span>
+                  </Link>
                 ))}
               </span>
             ) : null}
