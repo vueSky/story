@@ -112,6 +112,28 @@ export function getRelatedPosts(slug: string, limit = 3): PostMeta[] {
     .map((x) => x.post);
 }
 
+export interface TagInfo {
+  tag: string;
+  count: number;
+}
+
+/** 聚合所有标签及其文章数量，按数量倒序、相同数量按字母序 */
+export function getAllTags(): TagInfo[] {
+  const map = new Map<string, number>();
+  for (const p of getAllPosts()) {
+    for (const t of p.tags) {
+      map.set(t, (map.get(t) || 0) + 1);
+    }
+  }
+  return Array.from(map.entries())
+    .map(([tag, count]) => ({ tag, count }))
+    .sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag));
+}
+
+export function getPostsByTag(tag: string): PostMeta[] {
+  return getAllPosts().filter((p) => p.tags.includes(tag));
+}
+
 export function getPostBySlug(slug: string): Post {
   const raw = fs.readFileSync(path.join(postsDir, `${slug}.md`), "utf8");
   const { data, content } = matter(raw);
