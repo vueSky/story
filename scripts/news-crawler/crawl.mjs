@@ -23,6 +23,12 @@
  *                       https://story-blog-publisher.xxx.workers.dev
  *   PUBLISH_TOKEN     Worker 鉴权 token（如 781650249）
  *   POSTS_DIR         未配置 PUBLISH_ENDPOINT 时本地写盘目录，默认 posts
+ *
+ *   ── 去重（可选） ──
+ *   GITHUB_TOKEN      GitHub PAT 或 Actions 自动 token，用于读写 seen-ids
+ *   SEEN_REPO         仓库名，格式 owner/repo，默认读 SEEN_PATH 所在仓库
+ *   SEEN_PATH         seen-ids 文件路径，默认 data/news-seen.json
+ *   MAX_SEEN          最多保留多少条 seen URL，默认 1000
  */
 
 import fs from 'node:fs/promises';
@@ -46,6 +52,11 @@ const POSTS_DIR = process.env.POSTS_DIR || 'posts';
 
 const PUBLISH_ENDPOINT = (process.env.PUBLISH_ENDPOINT || '').replace(/\/+$/, '');
 const PUBLISH_TOKEN = process.env.PUBLISH_TOKEN || '';
+
+const GITHUB_TOKEN = process.env.GITHUB_TOKEN || '';
+const SEEN_REPO = process.env.SEEN_REPO || '';
+const SEEN_PATH = process.env.SEEN_PATH || 'data/news-seen.json';
+const MAX_SEEN = Number(process.env.MAX_SEEN || 1000);
 
 const SOURCES = ['hackernews', 'github-trending-today', 'v2ex-share'];
 
@@ -296,6 +307,75 @@ async function ensureDir(p) {
 }
 
 // ────────────────────────────────────────────────────────────────────
+// 去重：seen-ids 存储在 GitHub repo 的 data/news-seen.json
+// ────────────────────────────────────────────────────────────────────
+async function loadSeenUrls() {
+  if (!SEEN_REPO) return new Set();
+  try {
+    const rawUrl = `https://raw.githubusercontent.com/${SEEN_REPO}/main/${SEEN_PATH}`;
+    const res = await fetchWithTimeout(rawUrl, {}, 10000);
+    if (!res.ok) return new Set();
+    const data = await res.json();
+    const seen = new Set(Array.isArray(data.seen) ? data.seen : []);
+    log(`Seen IDs loaded: ${seen.size} URLs`);
+    return seen;
+  } catch (e) {
+    log(`! loadSeenUrls: ${e.message} (starting fresh)`);
+    return new Set();
+  }
+}
+
+async function saveSeenUrls(seenSet) {
+  if (!GITHUB_TOKEN || !SEEN_REPO) return;
+  const apiUrl = `https://api.github.com/repos/${SEEN_REPO}/contents/${SEEN_PATH}`;
+  const ghHeaders = {
+    authorization: `Bearer ${GITHUB_TOKEN}`,
+    'content-type': 'application/json',
+    'user-agent': 'news-crawler',
+    accept: 'application/vnd.github+json',
+  };
+
+  // 取现有文件 SHA（PUT 更新时必须提供）
+  let sha;
+  try {
+    const res = await fetchWithTimeout(apiUrl, { headers: ghHeaders }, 10000);
+    if (res.ok) {
+      const data = await res.json();
+      sha = data.sha;
+    }
+  } catch {}
+
+  // 保留最近 MAX_SEEN 条
+  const seen = [...seenSet].slice(-MAX_SEEN);
+  const payload = JSON.stringify({ seen, updatedAt: new Date().toISOString() }, null, 2);
+  const content = Buffer.from(payload).toString('base64');
+
+  try {
+    const res = await fetchWithTimeout(
+      apiUrl,
+      {
+        method: 'PUT',
+        headers: ghHeaders,
+        body: JSON.stringify({
+          message: 'chore: update news seen-ids [skip actions]',
+          content,
+          ...(sha ? { sha } : {}),
+        }),
+      },
+      15000
+    );
+    if (res.ok) {
+      log(`Seen IDs saved: ${seen.length} URLs`);
+    } else {
+      const t = await res.text().catch(() => '');
+      log(`! saveSeenUrls ${res.status}: ${t.slice(0, 100)}`);
+    }
+  } catch (e) {
+    log(`! saveSeenUrls: ${e.message}`);
+  }
+}
+
+// ────────────────────────────────────────────────────────────────────
 // 发布
 // ────────────────────────────────────────────────────────────────────
 /**
@@ -379,12 +459,19 @@ async function main() {
     }`
   );
 
-  const list = await fetchNewsList();
+  const [list, seenUrls] = await Promise.all([fetchNewsList(), loadSeenUrls()]);
 
   const buckets = SOURCES.map((srcId) => {
     const block = list.find((b) => b.id === srcId);
     const items = (block?.items || [])
       .filter((it) => it && it.url && /^https?:\/\//i.test(it.url))
+      .filter((it) => {
+        if (seenUrls.has(it.url)) {
+          log(`  ~ skip (seen): ${it.url}`);
+          return false;
+        }
+        return true;
+      })
       .slice(0, MAX_ITEMS_PER_SRC);
     return { srcId, label: SOURCE_LABEL[srcId] || srcId, items };
   });
@@ -392,10 +479,11 @@ async function main() {
   const totalItems = buckets.reduce((s, b) => s + b.items.length, 0);
   log(`Total items to summarize: ${totalItems}`);
   if (totalItems === 0) {
-    log('No items, abort.');
+    log('All items already seen, nothing to publish.');
     return;
   }
 
+  const newUrls = [];
   const sections = [];
   for (const bucket of buckets) {
     if (bucket.items.length === 0) continue;
@@ -405,6 +493,7 @@ async function main() {
       try {
         const md = await processItem(item, bucket.label);
         blocks.push(md);
+        newUrls.push(item.url);
       } catch (e) {
         log(`  ! processItem error: ${e.message}`);
         blocks.push(
@@ -439,6 +528,10 @@ async function main() {
     log('PUBLISH_ENDPOINT 未配置，fallback 到本地写盘');
     await writeToLocal({ title: humanTitle, content, tags, slug });
   }
+
+  // 发布成功后更新 seen-ids
+  for (const url of newUrls) seenUrls.add(url);
+  await saveSeenUrls(seenUrls);
 
   log('=== News Crawler done ===');
 }

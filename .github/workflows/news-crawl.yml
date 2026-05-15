@@ -2,8 +2,8 @@ name: News Crawl
 
 on:
   schedule:
-    # 每 8 小时跑一次（UTC: 00:00 / 08:00 / 16:00）
-    - cron: '0 0,8,16 * * *'
+    # 每 1 小时跑一次
+    - cron: '0 * * * *'
   workflow_dispatch:
     inputs:
       retry:
@@ -11,9 +11,8 @@ on:
         required: false
         default: 'true'
 
-# Worker 通过 GitHub API 写仓库，本 workflow 不需要写权限
 permissions:
-  contents: read
+  contents: write  # 用于更新 data/news-seen.json 去重记录
 
 concurrency:
   group: news-crawl
@@ -38,23 +37,23 @@ jobs:
         id: run1
         continue-on-error: true
         env:
-          # 大模型
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
           OPENAI_MODEL: ${{ secrets.OPENAI_MODEL }}
-          # Cloudflare Worker 发布
           PUBLISH_ENDPOINT: ${{ secrets.PUBLISH_ENDPOINT }}
           PUBLISH_TOKEN: ${{ secrets.PUBLISH_TOKEN }}
-          # 其它
           MAX_ITEMS_PER_SRC: ${{ vars.MAX_ITEMS_PER_SRC || '10' }}
+          # 去重：用自动 GITHUB_TOKEN 读写 data/news-seen.json
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SEEN_REPO: ${{ github.repository }}
         run: |
           node scripts/news-crawler/crawl.mjs
 
-      - name: Sleep 1h and retry on failure
+      - name: Sleep 30min and retry on failure
         if: steps.run1.outcome == 'failure'
         run: |
-          echo "First attempt failed at $(date -u). Sleeping 3600s before retry…"
-          sleep 3600
+          echo "First attempt failed at $(date -u). Sleeping 1800s before retry…"
+          sleep 1800
 
       - name: Run crawler (2nd attempt)
         if: steps.run1.outcome == 'failure'
@@ -65,6 +64,8 @@ jobs:
           PUBLISH_ENDPOINT: ${{ secrets.PUBLISH_ENDPOINT }}
           PUBLISH_TOKEN: ${{ secrets.PUBLISH_TOKEN }}
           MAX_ITEMS_PER_SRC: ${{ vars.MAX_ITEMS_PER_SRC || '10' }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SEEN_REPO: ${{ github.repository }}
         run: |
           node scripts/news-crawler/crawl.mjs
 
