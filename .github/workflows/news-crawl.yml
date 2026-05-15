@@ -1,0 +1,71 @@
+name: News Crawl
+
+on:
+  schedule:
+    # 每 1 小时跑一次
+    - cron: '0 * * * *'
+  workflow_dispatch:
+    inputs:
+      retry:
+        description: 'Manual run / retry'
+        required: false
+        default: 'true'
+
+permissions:
+  contents: write  # 用于更新 data/news-seen.json 去重记录
+
+concurrency:
+  group: news-crawl
+  cancel-in-progress: false
+
+jobs:
+  crawl:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Run crawler (1st attempt)
+        id: run1
+        continue-on-error: true
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+          OPENAI_MODEL: ${{ secrets.OPENAI_MODEL }}
+          PUBLISH_ENDPOINT: ${{ secrets.PUBLISH_ENDPOINT }}
+          PUBLISH_TOKEN: ${{ secrets.PUBLISH_TOKEN }}
+          MAX_ITEMS_PER_SRC: ${{ vars.MAX_ITEMS_PER_SRC || '10' }}
+          # 去重：用自动 GITHUB_TOKEN 读写 data/news-seen.json
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SEEN_REPO: ${{ github.repository }}
+        run: |
+          node scripts/news-crawler/crawl.mjs
+
+      - name: Sleep 30min and retry on failure
+        if: steps.run1.outcome == 'failure'
+        run: |
+          echo "First attempt failed at $(date -u). Sleeping 1800s before retry…"
+          sleep 1800
+
+      - name: Run crawler (2nd attempt)
+        if: steps.run1.outcome == 'failure'
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+          OPENAI_MODEL: ${{ secrets.OPENAI_MODEL }}
+          PUBLISH_ENDPOINT: ${{ secrets.PUBLISH_ENDPOINT }}
+          PUBLISH_TOKEN: ${{ secrets.PUBLISH_TOKEN }}
+          MAX_ITEMS_PER_SRC: ${{ vars.MAX_ITEMS_PER_SRC || '10' }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SEEN_REPO: ${{ github.repository }}
+        run: |
+          node scripts/news-crawler/crawl.mjs
+
