@@ -38,8 +38,6 @@ import process from 'node:process';
 // ────────────────────────────────────────────────────────────────────
 // 配置
 // ────────────────────────────────────────────────────────────────────
-const NEWS_API_URL =
-  process.env.NEWS_API_URL || 'https://news.likanug.top/api/s/entire';
 const OPENAI_BASE_URL = (
   process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1'
 ).replace(/\/+$/, '');
@@ -52,6 +50,11 @@ const POSTS_DIR = process.env.POSTS_DIR || 'posts';
 
 const PUBLISH_ENDPOINT = (process.env.PUBLISH_ENDPOINT || '').replace(/\/+$/, '');
 const PUBLISH_TOKEN = process.env.PUBLISH_TOKEN || '';
+
+// 优先用环境变量；有 Worker 时走代理（避免 GitHub Actions IP 被 Cloudflare 拦截）；最后直连
+const NEWS_API_URL =
+  process.env.NEWS_API_URL ||
+  (PUBLISH_ENDPOINT ? `${PUBLISH_ENDPOINT}/news-proxy` : 'https://news.likanug.top/api/s/entire');
 
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN || '';
 const SEEN_REPO = process.env.SEEN_REPO || '';

@@ -522,6 +522,50 @@ async function handleDelete(
   );
 }
 
+// ---------- News API 代理 ----------
+
+/**
+ * POST /news-proxy
+ * 代理 news.likanug.top/api/s/entire，解决 GitHub Actions IP 被 Cloudflare 拦截的问题。
+ * Worker 运行在 Cloudflare 网络内，可正常访问同网络的服务。
+ * 此接口无需鉴权（代理的是公开数据）。
+ */
+async function handleNewsProxy(request: Request, origin: string): Promise<Response> {
+  let body: unknown = { sources: ['hackernews', 'github-trending-today', 'v2ex-share'] };
+  try {
+    body = await request.json();
+  } catch {
+    // 允许空 body，使用默认 sources
+  }
+
+  try {
+    const resp = await fetch('https://news.likanug.top/api/s/entire', {
+      method: 'POST',
+      headers: {
+        accept: 'application/json',
+        'content-type': 'application/json',
+        origin: 'https://news.likanug.top',
+        referer: 'https://news.likanug.top/',
+        'user-agent':
+          'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 ' +
+          '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+      },
+      body: JSON.stringify(body),
+    });
+
+    const text = await resp.text();
+    return new Response(text, {
+      status: resp.status,
+      headers: {
+        'content-type': resp.headers.get('content-type') || 'application/json',
+        ...corsHeaders(origin),
+      },
+    });
+  } catch (err) {
+    return json({ error: 'News API proxy failed', detail: String(err) }, 502, origin);
+  }
+}
+
 // ---------- News Crawl 触发 ----------
 
 interface CrawlTriggerBody {
@@ -639,6 +683,11 @@ export default {
       );
     }
 
+    // news-proxy：无需鉴权（代理公开数据，Worker 网络内可访问）
+    if (method === "POST" && path === "/news-proxy") {
+      return handleNewsProxy(request, origin);
+    }
+
     // 以下接口都需要认证
     const authError = authGuard(request, env, origin);
     if (authError) return authError;
@@ -662,7 +711,7 @@ export default {
     return json(
       {
         error: "Not Found",
-        hint: "支持的路由：POST /、GET /list、POST /delete、POST /crawl/trigger",
+        hint: "支持的路由：POST /、GET /list、POST /delete、POST /crawl/trigger、POST /news-proxy",
       },
       404,
       origin
