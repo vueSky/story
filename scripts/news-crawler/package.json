@@ -1,0 +1,10 @@
+{
+  "name": "news-crawler",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Daily news crawler with AI summary for Story Blog",
+  "scripts": {
+    "start": "node crawl.mjs"
+  }
+}

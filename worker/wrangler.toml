@@ -3,6 +3,12 @@ main = "src/index.ts"
 compatibility_date = "2024-04-01"
 compatibility_flags = ["nodejs_compat"]
 
+# 当前调用方（统一用 PUBLISH_TOKEN 做 Bearer 鉴权）：
+#   1. 前端 admin 页（Vercel）
+#   2. News Crawl GitHub Action：
+#      .github/workflows/news-crawl.yml → scripts/news-crawler/crawl.mjs
+#      每 8 小时自动 POST 资讯聚合文章到本 Worker
+
 # ⚠️ 不要在此文件填敏感信息（会进 git）
 # 请用 wrangler secret put 或 Cloudflare Dashboard 设置：
 #   PUBLISH_TOKEN  —— 后台发布口令
