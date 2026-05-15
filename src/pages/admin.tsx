@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import Head from "next/head";
 
 type Status = "idle" | "publishing" | "success" | "error";
-type Mode = "compose" | "manage";
+type Mode = "compose" | "manage" | "news";
 
 interface ManagedPost {
   slug: string;
@@ -52,6 +52,11 @@ export default function Admin() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [deleting, setDeleting] = useState(false);
   const [deleteMessage, setDeleteMessage] = useState("");
+
+  // News Crawl 试运行态
+  const [triggering, setTriggering] = useState(false);
+  const [triggerMessage, setTriggerMessage] = useState("");
+  const [triggerStatus, setTriggerStatus] = useState<Status>("idle");
 
   const endpoint = getEndpoint();
 
@@ -241,6 +246,51 @@ export default function Admin() {
     }
   };
 
+  // ---------- News Crawl 试运行 ----------
+
+  const triggerCrawl = async () => {
+    if (!token.trim()) {
+      setTriggerStatus("error");
+      setTriggerMessage("请先输入 Token");
+      return;
+    }
+    setTriggering(true);
+    setTriggerStatus("publishing");
+    setTriggerMessage("正在请求 GitHub Actions 触发 workflow...");
+    try {
+      const url = joinEndpoint(endpoint, "/crawl/trigger");
+      const resp = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({}),
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok || data.ok === false) {
+        const parts = [data.error || `触发失败（${resp.status}）`];
+        if (data.hint) parts.push(`提示：${data.hint}`);
+        if (data.docs) parts.push(`文档：${data.docs}`);
+        throw new Error(parts.join("\n"));
+      }
+      setTriggerStatus("success");
+      const lines = [
+        `✓ ${data.message || "已触发"}`,
+        "GitHub Actions 已开始排队，约 10~20 秒后开始执行。",
+      ];
+      if (data.actionsUrl) {
+        lines.push(`运行详情：${data.actionsUrl}`);
+      }
+      setTriggerMessage(lines.join("\n"));
+    } catch (err) {
+      setTriggerStatus("error");
+      setTriggerMessage(err instanceof Error ? err.message : "触发失败");
+    } finally {
+      setTriggering(false);
+    }
+  };
+
   // ---------- 渲染 ----------
 
   return (
@@ -263,6 +313,7 @@ export default function Admin() {
             [
               { key: "compose", label: "写作" },
               { key: "manage", label: "管理" },
+              { key: "news", label: "资讯爬虫" },
             ] as Array<{ key: Mode; label: string }>
           ).map((t) => (
             <button
@@ -500,6 +551,75 @@ export default function Admin() {
                 NEXT_PUBLIC_PUBLISH_ENDPOINT
               </code>
               已配置为 Worker URL（不是 /api/publish）
+            </div>
+          </div>
+        ) : null}
+
+        {/* —— 资讯爬虫面板 —— */}
+        {mode === "news" ? (
+          <div className="space-y-4">
+            <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 text-sm text-gray-700 space-y-2">
+              <div className="font-medium text-gray-900">News Crawl · 每 8 小时一次</div>
+              <p>
+                自动抓取 <code className="px-1 bg-white border border-gray-200 rounded">Hacker News</code> /{" "}
+                <code className="px-1 bg-white border border-gray-200 rounded">GitHub Trending</code> /{" "}
+                <code className="px-1 bg-white border border-gray-200 rounded">V2EX 分享创造</code>，
+                对每条链接调用大模型生成 AI 总结，最后通过本 Worker 提交到{" "}
+                <code className="px-1 bg-white border border-gray-200 rounded">posts/</code>。
+              </p>
+              <p className="text-xs text-gray-500">
+                workflow 文件：
+                <code className="mx-1 px-1 bg-white border border-gray-200 rounded">
+                  .github/workflows/news-crawl.yml
+                </code>
+                · 调度：<code className="mx-1 px-1 bg-white border border-gray-200 rounded">cron 0 0,8,16 * * *</code>
+                · 失败会自动 sleep 1h 重试一次
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                onClick={triggerCrawl}
+                disabled={triggering}
+                className="px-5 py-2 bg-emerald-600 text-white rounded-md hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed transition"
+              >
+                {triggering ? "触发中..." : "▶ 试运行一次"}
+              </button>
+
+              <a
+                href={`https://github.com/${
+                  process.env.NEXT_PUBLIC_GISCUS_REPO || "caslanbigeyes/story"
+                }/actions/workflows/news-crawl.yml`}
+                target="_blank"
+                rel="noreferrer"
+                className="px-3 py-1.5 text-sm text-gray-600 border border-gray-300 rounded-md hover:bg-gray-50 transition"
+              >
+                打开 Actions 运行日志 ↗
+              </a>
+            </div>
+
+            {triggerMessage ? (
+              <div
+                className={`p-3 rounded-md text-sm whitespace-pre-wrap ${
+                  triggerStatus === "success"
+                    ? "bg-green-50 text-green-700 border border-green-200"
+                    : triggerStatus === "error"
+                    ? "bg-red-50 text-red-700 border border-red-200"
+                    : "bg-blue-50 text-blue-700 border border-blue-200"
+                }`}
+              >
+                {triggerMessage}
+              </div>
+            ) : null}
+
+            <div className="text-xs text-gray-400 leading-relaxed">
+              · 触发成功只代表 GitHub 已收到指令，真正的运行需要约 10 ~ 20 秒后才会出现在 Actions 列表里
+              <br />· 需要 Worker 端 <code className="px-1 bg-gray-100 rounded">GITHUB_TOKEN</code> 拥有
+              <code className="mx-1 px-1 bg-gray-100 rounded">actions: write</code> 权限
+              <br />· 仓库 Secrets 还需配 <code className="px-1 bg-gray-100 rounded">OPENAI_API_KEY</code> /
+              <code className="mx-1 px-1 bg-gray-100 rounded">PUBLISH_ENDPOINT</code> /
+              <code className="mx-1 px-1 bg-gray-100 rounded">PUBLISH_TOKEN</code>
             </div>
           </div>
         ) : null}

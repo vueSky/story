@@ -1,0 +1,70 @@
+name: News Crawl
+
+on:
+  schedule:
+    # 每 8 小时跑一次（UTC: 00:00 / 08:00 / 16:00）
+    - cron: '0 0,8,16 * * *'
+  workflow_dispatch:
+    inputs:
+      retry:
+        description: 'Manual run / retry'
+        required: false
+        default: 'true'
+
+# Worker 通过 GitHub API 写仓库，本 workflow 不需要写权限
+permissions:
+  contents: read
+
+concurrency:
+  group: news-crawl
+  cancel-in-progress: false
+
+jobs:
+  crawl:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Run crawler (1st attempt)
+        id: run1
+        continue-on-error: true
+        env:
+          # 大模型
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+          OPENAI_MODEL: ${{ secrets.OPENAI_MODEL }}
+          # Cloudflare Worker 发布
+          PUBLISH_ENDPOINT: ${{ secrets.PUBLISH_ENDPOINT }}
+          PUBLISH_TOKEN: ${{ secrets.PUBLISH_TOKEN }}
+          # 其它
+          MAX_ITEMS_PER_SRC: ${{ vars.MAX_ITEMS_PER_SRC || '10' }}
+        run: |
+          node scripts/news-crawler/crawl.mjs
+
+      - name: Sleep 1h and retry on failure
+        if: steps.run1.outcome == 'failure'
+        run: |
+          echo "First attempt failed at $(date -u). Sleeping 3600s before retry…"
+          sleep 3600
+
+      - name: Run crawler (2nd attempt)
+        if: steps.run1.outcome == 'failure'
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+          OPENAI_MODEL: ${{ secrets.OPENAI_MODEL }}
+          PUBLISH_ENDPOINT: ${{ secrets.PUBLISH_ENDPOINT }}
+          PUBLISH_TOKEN: ${{ secrets.PUBLISH_TOKEN }}
+          MAX_ITEMS_PER_SRC: ${{ vars.MAX_ITEMS_PER_SRC || '10' }}
+        run: |
+          node scripts/news-crawler/crawl.mjs
+

@@ -7,6 +7,7 @@
  *   POST /              发布单篇文章
  *   GET  /list          列出 posts/ 目录所有文章（管理用）
  *   POST /delete        批量删除文章 { slugs: string[] }
+ *   POST /crawl/trigger 触发 GitHub Actions 的 News Crawl workflow（手动跑一次）
  *
  * 绑定变量：
  *   PUBLISH_TOKEN   —— 后台口令
@@ -521,6 +522,96 @@ async function handleDelete(
   );
 }
 
+// ---------- News Crawl 触发 ----------
+
+interface CrawlTriggerBody {
+  workflow?: string;
+  ref?: string;
+}
+
+/**
+ * POST /crawl/trigger
+ * 调用 GitHub Actions 的 workflow_dispatch 接口，触发 news-crawl workflow。
+ * 请求体（可选）：
+ *   { "workflow": "news-crawl.yml", "ref": "main" }
+ * 需要 GITHUB_TOKEN 具备 `actions: write` 权限。
+ */
+async function handleCrawlTrigger(
+  request: Request,
+  env: Env,
+  origin: string
+): Promise<Response> {
+  let body: CrawlTriggerBody = {};
+  if (request.headers.get("content-length")) {
+    try {
+      body = await request.json<CrawlTriggerBody>();
+    } catch {
+      // 允许空 body
+    }
+  }
+
+  const workflow = body.workflow?.trim() || "news-crawl.yml";
+  const ref = body.ref?.trim() || "main";
+
+  const apiUrl = `https://api.github.com/repos/${env.REPO}/actions/workflows/${encodeURIComponent(
+    workflow
+  )}/dispatches`;
+
+  try {
+    const resp = await fetch(apiUrl, {
+      method: "POST",
+      headers: {
+        ...buildGithubHeaders(env),
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ ref }),
+    });
+
+    // 204 是 GitHub 对 dispatch 成功的标准响应（无 body）
+    if (resp.status === 204) {
+      return json(
+        {
+          ok: true,
+          message: `已触发 ${workflow} @ ${ref}`,
+          actionsUrl: `https://github.com/${env.REPO}/actions/workflows/${workflow}`,
+        },
+        200,
+        origin
+      );
+    }
+
+    // 失败：把 GitHub 的错误转给前端
+    const text = await resp.text();
+    let payload: GithubErrorPayload = {};
+    try {
+      payload = JSON.parse(text);
+    } catch {
+      // 忽略，使用 text
+    }
+    return json(
+      {
+        ok: false,
+        error: `触发失败（${resp.status}）：${payload.message || text || "未知"}`,
+        hint:
+          resp.status === 404
+            ? `找不到 workflow 文件 ${workflow}，或 PAT 无权限访问 ${env.REPO}`
+            : resp.status === 403 || resp.status === 401
+            ? "GITHUB_TOKEN 没有 actions:write 权限（Fine-grained PAT 需勾选 Actions: Read and write）"
+            : hintFromStatus(resp.status, env.REPO),
+        docs: payload.documentation_url,
+      },
+      resp.status,
+      origin
+    );
+  } catch (err) {
+    return json(
+      { ok: false, error: "GitHub 触发请求失败", detail: String(err) },
+      502,
+      origin
+    );
+  }
+}
+
 // ---------- Worker 入口 ----------
 
 export default {
@@ -564,8 +655,15 @@ export default {
       return handleDelete(request, env, origin);
     }
 
+    if (method === "POST" && path === "/crawl/trigger") {
+      return handleCrawlTrigger(request, env, origin);
+    }
+
     return json(
-      { error: "Not Found", hint: "支持的路由：POST /、GET /list、POST /delete" },
+      {
+        error: "Not Found",
+        hint: "支持的路由：POST /、GET /list、POST /delete、POST /crawl/trigger",
+      },
       404,
       origin
     );

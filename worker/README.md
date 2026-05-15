@@ -1,24 +1,35 @@
 # Story Blog Publisher · Cloudflare Worker
 
-独立的博客发布服务。前端 admin 页把发布请求发到这个 Worker，Worker 再调用 GitHub API 提交文章。
+独立的博客发布服务。前端 admin 页 / News Crawl GitHub Action 都把发布请求发到
+这个 Worker，由 Worker 统一去调用 GitHub Contents API 提交文章。
 
 ## 架构
 
 ```
-前端 admin 页 (Vercel)
-    │
-    │  POST  JSON + Bearer Token
-    ▼
-Cloudflare Worker  (本项目)
-    │
-    │  GitHub Contents API
-    ▼
-GitHub Repo (caslanbigeyes/story)
-    │
-    │  webhook
-    ▼
-Vercel 自动重建 → 上线
+┌─────────────────────────┐        ┌────────────────────────────┐
+│  前端 admin 页 (Vercel)  │        │  News Crawl GitHub Action  │
+│  人工写作 → 点「发布」   │        │  每 8h 自动跑 crawl.mjs    │
+└────────────┬────────────┘        └──────────────┬─────────────┘
+             │   POST / + Bearer <PUBLISH_TOKEN>  │
+             └─────────────────┬──────────────────┘
+                               ▼
+                  ┌─────────────────────────────┐
+                  │  Cloudflare Worker (本项目) │
+                  │  story-blog-publisher       │
+                  └──────────────┬──────────────┘
+                                 │ GitHub Contents API
+                                 ▼
+                  GitHub Repo (caslanbigeyes/story)
+                                 │ webhook
+                                 ▼
+                  Vercel / GitHub Pages 自动重建 → 上线
 ```
+
+> 当前调用方（统一用 `PUBLISH_TOKEN=781650249` 做 Bearer 鉴权）：
+> 1. **前端 admin 页**：人工写文章
+> 2. **News Crawl Action**（`scripts/news-crawler/crawl.mjs`）：每 8 小时自动
+>    拉取 Hacker News / GitHub Trending / V2EX，AI 总结后 POST 过来
+
 
 ## 本地开发
 
@@ -111,6 +122,29 @@ NEXT_PUBLIC_PUBLISH_ENDPOINT=https://story-blog-publisher.xxx.workers.dev
 
 未配置此变量时，前端保留原行为（走 `/api/publish`），两种方式可无缝切换。
 
+## News Crawl GitHub Action 对接
+
+仓库根目录的 `.github/workflows/news-crawl.yml` 每 8 小时跑一次
+`scripts/news-crawler/crawl.mjs`，由该脚本通过本 Worker 发布每日资讯聚合
+文章（Hacker News / GitHub Trending / V2EX + AI 总结）。
+
+去 GitHub 仓库 `Settings → Secrets and variables → Actions` 添加：
+
+| 名称              | 值                                                                |
+| ----------------- | ----------------------------------------------------------------- |
+| `PUBLISH_ENDPOINT` | 部署后的 Worker URL，如 `https://story-blog-publisher.xxx.workers.dev` |
+| `PUBLISH_TOKEN`   | 与 Worker secret 相同的 token：`781650249`                        |
+| `OPENAI_API_KEY`  | 大模型 key                                                        |
+
+> 调用方式：`POST <PUBLISH_ENDPOINT>/` ＋ `Authorization: Bearer 781650249`，
+> body 形如 `{ title, content, tags }`，与前端 admin 页完全一致。
+>
+> ⚠️ 如果你设了 `ALLOWED_ORIGIN`，请注意 GitHub Actions 发的请求**没有**
+> `Origin` 头，会被认作非浏览器调用，Worker 的 CORS 检查不影响业务逻辑
+> （CORS 只影响响应头是否带 ACAO，不影响请求本身），所以保持原样即可。
+> 真要严格限制，建议在 Worker 里再加一层「`Authorization` 校验已经够了」
+> 的判断，不要在 Origin 上做拦截，否则 Action 会被误伤。
+
 ## 接口规范
 
 ### `POST /`
@@ -155,6 +189,37 @@ NEXT_PUBLIC_PUBLISH_ENDPOINT=https://story-blog-publisher.xxx.workers.dev
 ```json
 { "ok": true, "service": "story-blog-publisher", "time": "..." }
 ```
+
+### `POST /crawl/trigger` — 手动触发 News Crawl
+
+请求头：
+- `Content-Type: application/json`
+- `Authorization: Bearer <PUBLISH_TOKEN>`
+
+请求体（可选）：
+
+```json
+{
+  "workflow": "news-crawl.yml",
+  "ref": "main"
+}
+```
+
+成功响应（200）：
+
+```json
+{
+  "ok": true,
+  "message": "已触发 news-crawl.yml @ main",
+  "actionsUrl": "https://github.com/<owner>/<repo>/actions/workflows/news-crawl.yml"
+}
+```
+
+> 该接口走 GitHub 的 `workflow_dispatch` API，需要 Worker 的 `GITHUB_TOKEN`
+> 具备 **`Actions: Read and write`** 权限（Classic PAT 需勾选 `workflow` scope，
+> Fine-grained PAT 需勾选 `Actions: Read and write`）。
+>
+> 触发只代表 GitHub 已收到指令，真正的运行 ≈ 10–20 秒后才会出现在 Actions 列表。
 
 ### `OPTIONS /` — CORS preflight
 
